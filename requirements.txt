@@ -1,3 +1,4 @@
 requests
 musicdl
 PySide6
+textual
