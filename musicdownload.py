@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QTableWidget,
     QTableWidgetItem,
-    QHeaderView,
     QMenu,
     QFileDialog,
     QMessageBox,
@@ -56,7 +55,6 @@ def sanitize_filename(filename):
     return re.sub(r'[\\/*?:"<>|]', "_", str(filename))
 
 
-# ================= 自定义现代 UI 组件 (保留原样) =================
 class ModernComboBox(QComboBox):
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -113,7 +111,6 @@ class ModernSpinBox(QSpinBox):
         painter.end()
 
 
-# ================= [优化 1] 引入线程池处理图片下载 =================
 class ImageWorkerSignals(QObject):
     """QRunnable 不能直接发信号，需要借助 QObject"""
 
@@ -136,9 +133,7 @@ class ImageDownloadTask(QRunnable):
             if not self.image_url:
                 self.signals.error.emit(self.gen, self.row)
                 return
-            response = requests.get(
-                self.image_url, timeout=5
-            )  # [优化] 缩短超时时间避免死等
+            response = requests.get(self.image_url, timeout=5)
             if response.status_code == 200:
                 pixmap = QPixmap()
                 pixmap.loadFromData(response.content)
@@ -230,7 +225,6 @@ class DownloadThread(QThread):
             new_audio_name = f"{base_name}.{ext}"
             new_audio_path = os.path.join(self.target_dir, new_audio_name)
 
-            # [优化 4] 防止同名文件覆盖报错
             try:
                 if os.path.exists(new_audio_path):
                     os.remove(new_audio_path)
@@ -341,7 +335,6 @@ class SimpleProgressDialog(QDialog):
 
 
 class FlowLayout(QLayout):
-    # (流式布局代码较长，未修改，保持原样)
     def __init__(self, parent=None, margin=-1, hspacing=-1, vspacing=-1):
         super(FlowLayout, self).__init__(parent)
         self._item_list = []
@@ -487,7 +480,6 @@ class MusicDownloader(QMainWindow):
         self.music_client = None
         self.current_right_click_row = -1
 
-        # [优化 1] 初始化全局线程池，控制最大并发数防止卡死
         self.thread_pool = QThreadPool.globalInstance()
         self.thread_pool.setMaxThreadCount(10)
         self._search_gen = 0  # incremented each search; stale image callbacks check this
@@ -680,7 +672,6 @@ class MusicDownloader(QMainWindow):
     def on_auto_download_toggle(self, state):
         self.auto_download_after_search = self.check_auto_download.isChecked()
 
-    # 右键菜单等保持原样...
     def show_table_context_menu(self, pos):
         item = self.results_table.itemAt(pos)
         if not item:
@@ -717,19 +708,19 @@ class MusicDownloader(QMainWindow):
         menu.exec(self.results_table.mapToGlobal(pos))
 
     def download_current_row(self):
-        # 原样
         if self.current_right_click_row < 0 or not self.music_client:
             return
         if str(self.current_right_click_row) not in self.music_records:
             return
         song_info = self.music_records[str(self.current_right_click_row)]
         song_name = song_info.get("song_name", "未知歌曲")
-        singers = ", ".join(song_info.get("singers", []))
+        singers = song_info.get("singers", "")
+        singers_str = "&".join([str(s) for s in singers]) if isinstance(singers, list) else str(singers)
 
         reply = QMessageBox.question(
             self,
             "确认下载",
-            f"确定要下载这首歌曲吗？\n\n🎵 {song_name} - {singers}",
+            f"确定要下载这首歌曲吗？\n\n🎵 {song_name} - {singers_str}",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:
@@ -741,7 +732,6 @@ class MusicDownloader(QMainWindow):
         for row in range(self.results_table.rowCount()):
             cell_widget = self.results_table.cellWidget(row, 0)
             if cell_widget:
-                # Use a lowercase variable name 'checkbox'
                 checkbox = cell_widget.findChild(QCheckBox)
                 if checkbox:
                     checkbox.setChecked(True)
@@ -750,7 +740,6 @@ class MusicDownloader(QMainWindow):
         for row in range(self.results_table.rowCount()):
             cell_widget = self.results_table.cellWidget(row, 0)
             if cell_widget:
-                # Use a lowercase variable name 'checkbox'
                 checkbox = cell_widget.findChild(QCheckBox)
                 if checkbox:
                     checkbox.setChecked(False)
@@ -832,8 +821,7 @@ class MusicDownloader(QMainWindow):
         self.search_results = search_results
         self.music_records = {}
 
-        # [优化 2] 清理线程池排队任务（如果有旧的未完成的搜索任务图）
-        self.thread_pool.clear()
+        self.thread_pool.clear()  # drop pending image tasks from the previous search
         self._search_gen += 1
         current_gen = self._search_gen
 
@@ -887,7 +875,6 @@ class MusicDownloader(QMainWindow):
 
                 self.music_records[str(row)] = per_source_search_result
 
-                # [优化 1] 将图片下载投递到线程池，而不是直接 new QThread
                 album_image_url = self.get_album_image_url(per_source_search_result)
                 if album_image_url:
                     task = ImageDownloadTask(row, album_image_url, current_gen)
@@ -911,7 +898,6 @@ class MusicDownloader(QMainWindow):
             )
 
     def _start_download_task(self, songs_list, msg):
-        """[优化] 提取出公共的下载弹窗逻辑"""
         if hasattr(self, 'download_thread') and self.download_thread.isRunning():
             return
 
@@ -1015,7 +1001,6 @@ class MusicDownloader(QMainWindow):
         if not self.music_client:
             return
 
-        # [优化 3] 搜索时禁用按钮防止重复点击引发异常
         self.btn_search.setEnabled(False)
         self.btn_search.setText("搜索中...")
 
