@@ -179,20 +179,19 @@ class DownloadThread(QThread):
     error = Signal(str)
     progress = Signal(int, int)  # current, total
 
-    def __init__(self, music_client, song_infos, target_dir):
+    def __init__(self, music_client, song_infos, target_dir, temp_dir=None):
         super().__init__()
         self.music_client = music_client
         self.song_infos = song_infos
         self.target_dir = target_dir
+        self.temp_dir = temp_dir
         self._cancelled = False
 
     def cancel(self):
         self._cancelled = True
 
     def _get_val(self, obj, key, default=""):
-        if isinstance(obj, dict):
-            return obj.get(key, default)
-        return getattr(obj, key, default) if hasattr(obj, key) else default
+        return obj.get(key, default) if isinstance(obj, dict) else default
 
     def _move_downloaded(self, downloaded_songs):
         success_count = 0
@@ -258,6 +257,8 @@ class DownloadThread(QThread):
                 except Exception as e:
                     print(f"下载单首歌曲失败: {e}")
                 self.progress.emit(i + 1, total)
+            if self.temp_dir and os.path.isdir(self.temp_dir):
+                shutil.rmtree(self.temp_dir, ignore_errors=True)
             self.finished.emit(success_count)
         except Exception as e:
             self.error.emit(str(e))
@@ -475,7 +476,6 @@ class MusicDownloader(QMainWindow):
         }
         self.source_map_en_to_cn = {v: k for k, v in self.source_map_cn_to_en.items()}
 
-        self.search_results = {}
         self.music_records = {}
         self.music_client = None
         self.current_right_click_row = -1
@@ -506,7 +506,6 @@ class MusicDownloader(QMainWindow):
             )
 
     def get_modern_style(self):
-        # 样式表太长省略部分重复内容，保留核心
         return """
         #CentralWidget { background-color: #f3f4f6; }
         QGroupBox { font-size: 11pt; font-weight: bold; color: #1f2937; background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; margin-top: 12px; padding-top: 14px; padding-bottom: 6px; }
@@ -751,6 +750,7 @@ class MusicDownloader(QMainWindow):
         if dir_path:
             self.save_dir = dir_path
             self.save_dir_edit.setText(dir_path)
+            os.makedirs(dir_path, exist_ok=True)
 
     def init_music_client(self):
         if not MUSICDL_AVAILABLE:
@@ -818,7 +818,6 @@ class MusicDownloader(QMainWindow):
 
     def load_table_with_results(self, search_results):
         self.results_table.setRowCount(0)
-        self.search_results = search_results
         self.music_records = {}
 
         self.thread_pool.clear()  # drop pending image tasks from the previous search
@@ -833,7 +832,6 @@ class MusicDownloader(QMainWindow):
         row = 0
         for _, per_source_search_results in search_results.items():
             for per_source_search_result in per_source_search_results:
-                # Checkbox
                 w = QWidget()
                 lay = QHBoxLayout(w)
                 lay.addWidget(QCheckBox())
@@ -909,8 +907,9 @@ class MusicDownloader(QMainWindow):
         )
         dlg.show()
 
+        temp_work_dir = os.path.join(self.current_dir, ".musicdl_temp")
         self.download_thread = DownloadThread(
-            self.music_client, songs_list, self.save_dir
+            self.music_client, songs_list, self.save_dir, temp_dir=temp_work_dir
         )
 
         def on_cancelled():
@@ -929,6 +928,8 @@ class MusicDownloader(QMainWindow):
                     "已取消",
                     f"✅ 取消前已下载 {success_count} 首歌曲。\n已保存在：{self.save_dir}",
                 )
+            elif was_cancelled[0]:
+                QMessageBox.information(self, "已取消", "下载已取消。")
             elif not was_cancelled[0]:
                 QMessageBox.information(
                     self,
