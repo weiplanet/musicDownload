@@ -52,9 +52,20 @@ except ImportError:
     MUSICDL_AVAILABLE = False
     print("警告：musicdl 库未安装，请运行 pip install musicdl")
 
+SEARCH_SONG = "搜索歌曲"
+
+# Columns where text should be left-aligned in the results table
+_LEFT_ALIGNED_COLS = frozenset({2, 3, 4})
+
 
 def sanitize_filename(filename):
     return re.sub(r'[\\/*?:"<>|]', "_", str(filename))
+
+
+def format_singers(singers) -> str:
+    if isinstance(singers, list):
+        return "&".join(str(s) for s in singers)
+    return str(singers)
 
 
 class ModernComboBox(QComboBox):
@@ -136,7 +147,7 @@ class ImageDownloadTask(QRunnable):
                 self.signals.error.emit(self.gen, self.row)
                 return
             response = requests.get(self.image_url, timeout=5)
-            if response.status_code == 200:
+            if response.ok:
                 pixmap = QPixmap()
                 pixmap.loadFromData(response.content)
                 scaled_pixmap = pixmap.scaled(
@@ -152,7 +163,6 @@ class ImageDownloadTask(QRunnable):
             self.signals.error.emit(self.gen, self.row)
 
 
-# ================= 后台搜索与下载线程 =================
 class SearchThread(QThread):
     finished = Signal(dict)
     error = Signal(str)
@@ -165,7 +175,7 @@ class SearchThread(QThread):
 
     def run(self):
         try:
-            if self.search_type == "搜索歌曲":
+            if self.search_type == SEARCH_SONG:
                 results = self.music_client.search(keyword=self.keyword)
             else:
                 results = self.music_client.parseplaylist(self.keyword)
@@ -192,29 +202,21 @@ class DownloadThread(QThread):
     def cancel(self):
         self._cancelled = True
 
-    def _get_val(self, obj, key, default=""):
-        return obj.get(key, default) if isinstance(obj, dict) else default
-
     def _move_downloaded(self, downloaded_songs):
         success_count = 0
         for song in downloaded_songs:
-            save_path = self._get_val(song, "save_path")
+            save_path = song.get("save_path", "")
             if not save_path or not os.path.exists(save_path):
                 continue
 
-            song_name = self._get_val(song, "song_name", "未知歌曲")
-            singers = self._get_val(song, "singers", "未知歌手")
-            if isinstance(singers, list):
-                singer = "&".join([str(s) for s in singers])
-            else:
-                singer = str(singers)
-
-            album = self._get_val(song, "album", "")
-            identifier = self._get_val(song, "identifier", "")
+            song_name = song.get("song_name", "未知歌曲")
+            singer = format_singers(song.get("singers", "未知歌手"))
+            album = song.get("album", "")
+            identifier = song.get("identifier", "")
 
             ext = os.path.splitext(save_path)[1].lstrip(".")
             if not ext:
-                ext = self._get_val(song, "ext", "mp3")
+                ext = song.get("ext", "mp3")
 
             parts = [song_name, singer]
             if album:
@@ -223,8 +225,7 @@ class DownloadThread(QThread):
                 parts.append(str(identifier))
 
             base_name = sanitize_filename("-".join(parts))
-            new_audio_name = f"{base_name}.{ext}"
-            new_audio_path = os.path.join(self.target_dir, new_audio_name)
+            new_audio_path = os.path.join(self.target_dir, f"{base_name}.{ext}")
 
             try:
                 if os.path.exists(new_audio_path):
@@ -236,8 +237,7 @@ class DownloadThread(QThread):
 
             old_lrc_path = os.path.splitext(save_path)[0] + ".lrc"
             if os.path.exists(old_lrc_path):
-                new_lrc_name = f"{base_name}.lrc"
-                new_lrc_path = os.path.join(self.target_dir, new_lrc_name)
+                new_lrc_path = os.path.join(self.target_dir, f"{base_name}.lrc")
                 try:
                     if os.path.exists(new_lrc_path):
                         os.remove(new_lrc_path)
@@ -408,26 +408,28 @@ class FlowLayout(QLayout):
         )
         x, y = effective.x(), effective.y()
         lineHeight = 0
+        spaceX = self.horizontalSpacing()
+        spaceY = self.verticalSpacing()
         for item in self._item_list:
             widget = item.widget()
-            spaceX = self.horizontalSpacing()
-            if spaceX == -1:
-                spaceX = widget.style().layoutSpacing(
+            item_spaceX = spaceX
+            if item_spaceX == -1:
+                item_spaceX = widget.style().layoutSpacing(
                     QSizePolicy.ControlType.PushButton,
                     QSizePolicy.ControlType.PushButton,
                     Qt.Orientation.Horizontal,
                 )
-            spaceY = self.verticalSpacing()
-            if spaceY == -1:
-                spaceY = widget.style().layoutSpacing(
+            item_spaceY = spaceY
+            if item_spaceY == -1:
+                item_spaceY = widget.style().layoutSpacing(
                     QSizePolicy.ControlType.PushButton,
                     QSizePolicy.ControlType.PushButton,
                     Qt.Orientation.Vertical,
                 )
-            nextX = x + item.sizeHint().width() + spaceX
-            if nextX - spaceX > effective.right() and lineHeight > 0:
-                x, y = effective.x(), y + lineHeight + spaceY
-                nextX, lineHeight = x + item.sizeHint().width() + spaceX, 0
+            nextX = x + item.sizeHint().width() + item_spaceX
+            if nextX - item_spaceX > effective.right() and lineHeight > 0:
+                x, y = effective.x(), y + lineHeight + item_spaceY
+                nextX, lineHeight = x + item.sizeHint().width() + item_spaceX, 0
             if not testOnly:
                 item.setGeometry(QRect(QPoint(x, y), item.sizeHint()))
             x, lineHeight = nextX, max(lineHeight, item.sizeHint().height())
@@ -489,7 +491,6 @@ class CheckableHeader(QHeaderView):
             )
 
 
-# 主窗口
 class MusicDownloader(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -525,6 +526,8 @@ class MusicDownloader(QMainWindow):
 
         self.music_client = None
         self.current_right_click_row = -1
+        self.download_thread = None
+        self.search_thread = None
 
         self.thread_pool = QThreadPool.globalInstance()
         self.thread_pool.setMaxThreadCount(10)
@@ -533,8 +536,6 @@ class MusicDownloader(QMainWindow):
         self.current_dir = os.path.dirname(os.path.abspath(__file__))
         self.save_dir = os.path.join(self.current_dir, "downloads")
         os.makedirs(self.save_dir, exist_ok=True)
-
-        self.auto_download_after_search = False
 
         central = QWidget()
         central.setObjectName("CentralWidget")
@@ -613,7 +614,7 @@ class MusicDownloader(QMainWindow):
         flow_container = QWidget()
         flow = FlowLayout(flow_container, margin=0)
         self.source_checkboxes = []
-        default_checked = ["酷我音乐", "酷狗音乐"]
+        default_checked = {"酷我音乐", "酷狗音乐"}
         for cn_name in self.source_map_cn_to_en.keys():
             cb = QCheckBox(cn_name)
             if cn_name in default_checked:
@@ -639,7 +640,6 @@ class MusicDownloader(QMainWindow):
 
         self.check_auto_download = QCheckBox("🚀 搜索后自动下载全部")
         self.check_auto_download.setStyleSheet("font-weight: bold; color: #dc2626;")
-        self.check_auto_download.stateChanged.connect(self.on_auto_download_toggle)
 
         h1.addWidget(label_limit)
         h1.addWidget(self.spin_limit)
@@ -653,7 +653,7 @@ class MusicDownloader(QMainWindow):
 
         h2 = QHBoxLayout()
         self.search_mode = ModernComboBox()
-        self.search_mode.addItems(["搜索歌曲", "解析歌单链接"])
+        self.search_mode.addItems([SEARCH_SONG, "解析歌单链接"])
         self.search_mode.setFixedWidth(130)
 
         self.search_edit = QLineEdit()
@@ -745,9 +745,6 @@ class MusicDownloader(QMainWindow):
         layout.addWidget(self.results_table)
         parent_layout.addLayout(layout)
 
-    def on_auto_download_toggle(self, state):
-        self.auto_download_after_search = self.check_auto_download.isChecked()
-
     def show_table_context_menu(self, pos):
         item = self.results_table.itemAt(pos)
         if not item:
@@ -793,8 +790,7 @@ class MusicDownloader(QMainWindow):
         if not song_info:
             return
         song_name = song_info.get("song_name", "未知歌曲")
-        singers = song_info.get("singers", "")
-        singers_str = "&".join([str(s) for s in singers]) if isinstance(singers, list) else str(singers)
+        singers_str = format_singers(song_info.get("singers", ""))
 
         reply = QMessageBox.question(
             self,
@@ -807,35 +803,32 @@ class MusicDownloader(QMainWindow):
 
         self._start_download_task([song_info], f"正在处理：{song_name}")
 
-    def select_all_songs(self):
+    def _set_all_songs_checked(self, checked: bool):
         for row in range(self.results_table.rowCount()):
             cell_widget = self.results_table.cellWidget(row, 0)
             if cell_widget:
                 checkbox = cell_widget.findChild(QCheckBox)
                 if checkbox:
-                    checkbox.setChecked(True)
+                    checkbox.setChecked(checked)
+
+    def select_all_songs(self):
+        self._set_all_songs_checked(True)
 
     def deselect_all_songs(self):
-        for row in range(self.results_table.rowCount()):
-            cell_widget = self.results_table.cellWidget(row, 0)
-            if cell_widget:
-                checkbox = cell_widget.findChild(QCheckBox)
-                if checkbox:
-                    checkbox.setChecked(False)
+        self._set_all_songs_checked(False)
+
+    def _set_all_sources_checked(self, checked: bool):
+        for cb in self.source_checkboxes:
+            cb.setChecked(checked)
 
     def select_all_sources(self):
-        for cb in self.source_checkboxes:
-            cb.setChecked(True)
+        self._set_all_sources_checked(True)
 
     def clear_all_sources(self):
-        for cb in self.source_checkboxes:
-            cb.setChecked(False)
+        self._set_all_sources_checked(False)
 
     def on_header_check_changed(self, checked):
-        if checked:
-            self.select_all_songs()
-        else:
-            self.deselect_all_songs()
+        self._set_all_songs_checked(checked)
 
     def on_row_double_clicked(self, row, column):
         self.current_right_click_row = row
@@ -853,7 +846,6 @@ class MusicDownloader(QMainWindow):
     def init_music_client(self):
         if not MUSICDL_AVAILABLE:
             return None
-        os.makedirs(self.save_dir, exist_ok=True)
         temp_work_dir = os.path.join(self.current_dir, ".musicdl_temp")
         os.makedirs(temp_work_dir, exist_ok=True)
 
@@ -925,74 +917,66 @@ class MusicDownloader(QMainWindow):
         self._search_gen += 1
         current_gen = self._search_gen
 
-        all_songs = []
-        for per_source in search_results.values():
-            all_songs.extend(per_source)
-
+        all_songs = [song for per_source in search_results.values() for song in per_source]
         self.results_table.setRowCount(len(all_songs))
-        row = 0
-        for _, per_source_search_results in search_results.items():
-            for per_source_search_result in per_source_search_results:
-                w = QWidget()
-                lay = QHBoxLayout(w)
-                lay.addWidget(QCheckBox())
-                lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                lay.setContentsMargins(0, 0, 0, 0)
-                self.results_table.setCellWidget(row, 0, w)
 
-                song_name = per_source_search_result.get("song_name", "")
-                singers = per_source_search_result.get("singers", "")
-                singers_str = "&".join([str(s) for s in singers]) if isinstance(singers, list) else str(singers)
-                album = per_source_search_result.get("album", "")
-                source_cn = self.source_map_en_to_cn.get(
-                    per_source_search_result.get("source", ""), ""
+        for row, song in enumerate(all_songs):
+            w = QWidget()
+            lay = QHBoxLayout(w)
+            lay.addWidget(QCheckBox())
+            lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lay.setContentsMargins(0, 0, 0, 0)
+            self.results_table.setCellWidget(row, 0, w)
+
+            song_name = song.get("song_name", "")
+            singers_str = format_singers(song.get("singers", ""))
+            album = song.get("album", "")
+            source_cn = self.source_map_en_to_cn.get(song.get("source", ""), "")
+
+            items = [
+                "",
+                "",
+                str(song_name),
+                singers_str,
+                str(album),
+                self.get_file_format(song),
+                str(song.get("file_size", "")),
+                str(song.get("duration", "")),
+                str(source_cn),
+            ]
+
+            for column, text in enumerate(items):
+                if column in (0, 1):
+                    continue
+                table_item = QTableWidgetItem(text)
+                align = (
+                    Qt.AlignmentFlag.AlignLeft
+                    if column in _LEFT_ALIGNED_COLS
+                    else Qt.AlignmentFlag.AlignHCenter
                 )
+                table_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | align)
+                if column == 2:
+                    table_item.setData(Qt.ItemDataRole.UserRole, song)
+                self.results_table.setItem(row, column, table_item)
 
-                items = [
-                    "",
-                    "",
-                    str(song_name),
-                    singers_str,
-                    str(album),
-                    self.get_file_format(per_source_search_result),
-                    str(per_source_search_result.get("file_size", "")),
-                    str(per_source_search_result.get("duration", "")),
-                    str(source_cn),
-                ]
+            album_image_url = self.get_album_image_url(song)
+            if album_image_url:
+                task = ImageDownloadTask(row, album_image_url, current_gen)
+                task.signals.finished.connect(self.on_image_downloaded)
+                task.signals.error.connect(self.on_image_error)
+                self.thread_pool.start(task)
+            else:
+                self.on_image_error(current_gen, row)
 
-                for column, text in enumerate(items):
-                    if column in [0, 1]:
-                        continue
-                    table_item = QTableWidgetItem(text)
-                    align = (
-                        Qt.AlignmentFlag.AlignLeft
-                        if column in [2, 3, 4]
-                        else Qt.AlignmentFlag.AlignHCenter
-                    )
-                    table_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | align)
-                    if column == 2:
-                        table_item.setData(Qt.ItemDataRole.UserRole, per_source_search_result)
-                    self.results_table.setItem(row, column, table_item)
-
-                album_image_url = self.get_album_image_url(per_source_search_result)
-                if album_image_url:
-                    task = ImageDownloadTask(row, album_image_url, current_gen)
-                    task.signals.finished.connect(self.on_image_downloaded)
-                    task.signals.error.connect(self.on_image_error)
-                    self.thread_pool.start(task)
-                else:
-                    self.on_image_error(current_gen, row)
-
-                row += 1
-
+        count = len(all_songs)
         self.results_table.setSortingEnabled(True)
-        self.btn_download.setEnabled(row > 0)
-        self.label_result_count.setText(f"共 {row} 首")
-        if self.auto_download_after_search and all_songs:
-            self._start_download_task(all_songs, f"正在处理 {len(all_songs)} 首歌曲")
+        self.btn_download.setEnabled(count > 0)
+        self.label_result_count.setText(f"共 {count} 首")
+        if self.check_auto_download.isChecked() and all_songs:
+            self._start_download_task(all_songs, f"正在处理 {count} 首歌曲")
 
     def _start_download_task(self, songs_list, msg):
-        if hasattr(self, 'download_thread') and self.download_thread.isRunning():
+        if self.download_thread is not None and self.download_thread.isRunning():
             return
 
         self.btn_download.setEnabled(False)
@@ -1012,9 +996,6 @@ class MusicDownloader(QMainWindow):
             was_cancelled[0] = True
             self.download_thread.cancel()
 
-        def on_progress(current, t):
-            dlg.update_progress(current, t)
-
         def on_finished(success_count):
             dlg.accept()
             self.btn_download.setEnabled(True)
@@ -1026,7 +1007,7 @@ class MusicDownloader(QMainWindow):
                 )
             elif was_cancelled[0]:
                 QMessageBox.information(self, "已取消", "下载已取消。")
-            elif not was_cancelled[0]:
+            else:
                 QMessageBox.information(
                     self,
                     "下载完成",
@@ -1039,7 +1020,7 @@ class MusicDownloader(QMainWindow):
             QMessageBox.critical(self, "错误", f"❌ 下载失败：{error_msg}")
 
         dlg.cancelled.connect(on_cancelled)
-        self.download_thread.progress.connect(on_progress)
+        self.download_thread.progress.connect(dlg.update_progress)
         self.download_thread.finished.connect(on_finished)
         self.download_thread.error.connect(on_error)
         self.download_thread.start()
@@ -1070,17 +1051,21 @@ class MusicDownloader(QMainWindow):
     def get_songs_by_download_scope(self):
         scope = self.combo_download_scope.currentText()
         songs = []
+        if scope == "全选":
+            for row in range(self.results_table.rowCount()):
+                item = self.results_table.item(row, 2)
+                if item:
+                    song_info = item.data(Qt.ItemDataRole.UserRole)
+                    if song_info:
+                        songs.append(song_info)
+            return songs
         for row in range(self.results_table.rowCount()):
             cell_widget = self.results_table.cellWidget(row, 0)
             if not cell_widget:
                 continue
             checkbox = cell_widget.findChild(QCheckBox)
             is_checked = checkbox.isChecked() if checkbox else False
-            if (
-                scope == "全选"
-                or (scope == "勾选" and is_checked)
-                or (scope == "未勾选" and not is_checked)
-            ):
+            if (scope == "勾选" and is_checked) or (scope == "未勾选" and not is_checked):
                 item = self.results_table.item(row, 2)
                 if item:
                     song_info = item.data(Qt.ItemDataRole.UserRole)
@@ -1089,7 +1074,7 @@ class MusicDownloader(QMainWindow):
         return songs
 
     def on_search(self):
-        if hasattr(self, 'search_thread') and self.search_thread.isRunning():
+        if self.search_thread is not None and self.search_thread.isRunning():
             return
 
         keyword = self.search_edit.text().strip()
