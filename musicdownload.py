@@ -182,82 +182,101 @@ class SearchThread(QThread):
 class DownloadThread(QThread):
     finished = Signal(int)
     error = Signal(str)
+    progress = Signal(int, int)  # current, total
 
     def __init__(self, music_client, song_infos, target_dir):
         super().__init__()
         self.music_client = music_client
         self.song_infos = song_infos
         self.target_dir = target_dir
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
 
     def _get_val(self, obj, key, default=""):
         if isinstance(obj, dict):
             return obj.get(key, default)
         return getattr(obj, key, default) if hasattr(obj, key) else default
 
+    def _move_downloaded(self, downloaded_songs):
+        success_count = 0
+        for song in downloaded_songs:
+            save_path = self._get_val(song, "save_path")
+            if not save_path or not os.path.exists(save_path):
+                continue
+
+            song_name = self._get_val(song, "song_name", "未知歌曲")
+            singers = self._get_val(song, "singers", "未知歌手")
+            if isinstance(singers, list):
+                singer = "&".join([str(s) for s in singers])
+            else:
+                singer = str(singers)
+
+            album = self._get_val(song, "album", "")
+            identifier = self._get_val(song, "identifier", "")
+
+            ext = os.path.splitext(save_path)[1].lstrip(".")
+            if not ext:
+                ext = self._get_val(song, "ext", "mp3")
+
+            parts = [song_name, singer]
+            if album:
+                parts.append(str(album))
+            if identifier:
+                parts.append(str(identifier))
+
+            base_name = sanitize_filename("-".join(parts))
+            new_audio_name = f"{base_name}.{ext}"
+            new_audio_path = os.path.join(self.target_dir, new_audio_name)
+
+            # [优化 4] 防止同名文件覆盖报错
+            try:
+                if os.path.exists(new_audio_path):
+                    os.remove(new_audio_path)
+                shutil.move(save_path, new_audio_path)
+                success_count += 1
+            except Exception as e:
+                print(f"移动音频文件失败 {save_path}: {e}")
+
+            old_lrc_path = os.path.splitext(save_path)[0] + ".lrc"
+            if os.path.exists(old_lrc_path):
+                new_lrc_name = f"{base_name}.lrc"
+                new_lrc_path = os.path.join(self.target_dir, new_lrc_name)
+                try:
+                    if os.path.exists(new_lrc_path):
+                        os.remove(new_lrc_path)
+                    shutil.move(old_lrc_path, new_lrc_path)
+                except Exception as e:
+                    print(f"移动歌词文件失败: {e}")
+        return success_count
+
     def run(self):
         try:
-            downloaded_songs = self.music_client.download(song_infos=self.song_infos)
+            total = len(self.song_infos)
             success_count = 0
-
-            for song in downloaded_songs:
-                save_path = self._get_val(song, "save_path")
-                if not save_path or not os.path.exists(save_path):
-                    continue
-
-                song_name = self._get_val(song, "song_name", "未知歌曲")
-                singers = self._get_val(song, "singers", "未知歌手")
-                if isinstance(singers, list):
-                    singer = "&".join([str(s) for s in singers])
-                else:
-                    singer = str(singers)
-
-                album = self._get_val(song, "album", "")
-                identifier = self._get_val(song, "identifier", "")
-
-                ext = os.path.splitext(save_path)[1].lstrip(".")
-                if not ext:
-                    ext = self._get_val(song, "ext", "mp3")
-
-                parts = [song_name, singer]
-                if album:
-                    parts.append(str(album))
-                if identifier:
-                    parts.append(str(identifier))
-
-                base_name = sanitize_filename("-".join(parts))
-                new_audio_name = f"{base_name}.{ext}"
-                new_audio_path = os.path.join(self.target_dir, new_audio_name)
-
-                # [优化 4] 防止同名文件覆盖报错
+            for i, song_info in enumerate(self.song_infos):
+                if self._cancelled:
+                    break
                 try:
-                    if os.path.exists(new_audio_path):
-                        os.remove(new_audio_path)
-                    shutil.move(save_path, new_audio_path)
-                    success_count += 1
+                    results = self.music_client.download(song_infos=[song_info])
+                    success_count += self._move_downloaded(results)
                 except Exception as e:
-                    print(f"移动音频文件失败 {save_path}: {e}")
-
-                old_lrc_path = os.path.splitext(save_path)[0] + ".lrc"
-                if os.path.exists(old_lrc_path):
-                    new_lrc_name = f"{base_name}.lrc"
-                    new_lrc_path = os.path.join(self.target_dir, new_lrc_name)
-                    try:
-                        if os.path.exists(new_lrc_path):
-                            os.remove(new_lrc_path)
-                        shutil.move(old_lrc_path, new_lrc_path)
-                    except Exception as e:
-                        print(f"移动歌词文件失败: {e}")
-
+                    print(f"下载单首歌曲失败: {e}")
+                self.progress.emit(i + 1, total)
             self.finished.emit(success_count)
         except Exception as e:
             self.error.emit(str(e))
 
 
 class SimpleProgressDialog(QDialog):
-    def __init__(self, title, message, save_dir=None, parent=None):
+    cancelled = Signal()
+
+    def __init__(self, title, message, save_dir=None, total=0, parent=None):
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.setFixedSize(360, 130)
+        has_progress = total > 0
+        self.setFixedSize(360, 175 if has_progress else 130)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.setStyleSheet("""
@@ -284,13 +303,41 @@ class SimpleProgressDialog(QDialog):
             dir_label.setWordWrap(True)
             layout.addWidget(dir_label)
 
-        progress = QProgressBar()
-        progress.setRange(0, 0)
-        progress.setStyleSheet("""
+        if has_progress:
+            self._count_label = QLabel(f"0 / {total} 首")
+            self._count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._count_label.setStyleSheet("font-size: 9pt; color: #6b7280;")
+            layout.addWidget(self._count_label)
+
+        self._progress_bar = QProgressBar()
+        if has_progress:
+            self._progress_bar.setRange(0, total)
+            self._progress_bar.setValue(0)
+        else:
+            self._progress_bar.setRange(0, 0)
+        self._progress_bar.setStyleSheet("""
             QProgressBar { border: none; border-radius: 4px; background-color: #f3f4f6; height: 6px; }
             QProgressBar::chunk { background-color: #0078d4; border-radius: 4px; }
         """)
-        layout.addWidget(progress)
+        layout.addWidget(self._progress_bar)
+
+        if has_progress:
+            cancel_btn = QPushButton("取消")
+            cancel_btn.setStyleSheet("""
+                QPushButton { background-color: #f3f4f6; color: #374151; font-weight: normal; }
+                QPushButton:hover { background-color: #e5e7eb; }
+                QPushButton:pressed { background-color: #d1d5db; }
+            """)
+            cancel_btn.clicked.connect(self._on_cancel)
+            layout.addWidget(cancel_btn)
+
+    def update_progress(self, current, total):
+        self._progress_bar.setValue(current)
+        self._count_label.setText(f"{current} / {total} 首")
+
+    def _on_cancel(self):
+        self.cancelled.emit()
+        self.accept()
 
 
 class FlowLayout(QLayout):
@@ -868,27 +915,47 @@ class MusicDownloader(QMainWindow):
             return
 
         self.btn_download.setEnabled(False)
-        dlg = SimpleProgressDialog("下载提取中", msg, self.save_dir, self)
+        was_cancelled = [False]
+        total = len(songs_list)
+        dlg = SimpleProgressDialog(
+            "下载提取中", msg, save_dir=self.save_dir, total=total, parent=self
+        )
         dlg.show()
 
         self.download_thread = DownloadThread(
             self.music_client, songs_list, self.save_dir
         )
 
+        def on_cancelled():
+            was_cancelled[0] = True
+            self.download_thread.cancel()
+
+        def on_progress(current, t):
+            dlg.update_progress(current, t)
+
         def on_finished(success_count):
             dlg.accept()
             self.btn_download.setEnabled(True)
-            QMessageBox.information(
-                self,
-                "下载完成",
-                f"✅ 成功提取 {success_count} 首歌曲！\n已保存在：{self.save_dir}",
-            )
+            if was_cancelled[0] and success_count > 0:
+                QMessageBox.information(
+                    self,
+                    "已取消",
+                    f"✅ 取消前已下载 {success_count} 首歌曲。\n已保存在：{self.save_dir}",
+                )
+            elif not was_cancelled[0]:
+                QMessageBox.information(
+                    self,
+                    "下载完成",
+                    f"✅ 成功提取 {success_count} 首歌曲！\n已保存在：{self.save_dir}",
+                )
 
         def on_error(error_msg):
             dlg.accept()
             self.btn_download.setEnabled(True)
             QMessageBox.critical(self, "错误", f"❌ 下载失败：{error_msg}")
 
+        dlg.cancelled.connect(on_cancelled)
+        self.download_thread.progress.connect(on_progress)
         self.download_thread.finished.connect(on_finished)
         self.download_thread.error.connect(on_error)
         self.download_thread.start()
@@ -952,7 +1019,7 @@ class MusicDownloader(QMainWindow):
         self.btn_search.setText("搜索中...")
 
         dlg = SimpleProgressDialog(
-            "🔍 搜索中", "正在全网搜罗音乐，请稍候...", None, self
+            "🔍 搜索中", "正在全网搜罗音乐，请稍候...", parent=self
         )
         dlg.show()
 
