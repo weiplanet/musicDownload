@@ -492,8 +492,8 @@ class MusicDownloader(QMainWindow):
         self.thread_pool.setMaxThreadCount(10)
         self._search_gen = 0  # incremented each search; stale image callbacks check this
 
-        self.current_dir = os.getcwd()
-        self.save_dir = os.path.join(self.current_dir, "已下载音乐")
+        self.current_dir = os.path.dirname(os.path.abspath(__file__))
+        self.save_dir = os.path.join(self.current_dir, "downloads")
         os.makedirs(self.save_dir, exist_ok=True)
 
         self.auto_download_after_search = False
