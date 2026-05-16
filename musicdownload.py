@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QLayout,
     QSizePolicy,
     QGroupBox,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QFileDialog,
     QMessageBox,
+    QStyleOptionButton,
     QStyleOptionSpinBox,
     QStyle,
 )
@@ -442,6 +444,51 @@ class FlowLayout(QLayout):
         return -1
 
 
+class CheckableHeader(QHeaderView):
+    check_state_changed = Signal(bool)
+
+    def __init__(self, orientation, parent=None):
+        super().__init__(orientation, parent)
+        self._checked = False
+        self.setSectionsClickable(True)
+
+    def mousePressEvent(self, event):
+        if self.logicalIndexAt(event.pos()) in (0, 1):
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        index = self.logicalIndexAt(event.pos())
+        if index == 0:
+            self._checked = not self._checked
+            self.check_state_changed.emit(self._checked)
+            self.viewport().update()
+        elif index == 1:
+            return
+        else:
+            super().mouseReleaseEvent(event)
+
+    def paintSection(self, painter, rect, logical_index):
+        painter.save()
+        super().paintSection(painter, rect, logical_index)
+        painter.restore()
+        if logical_index == 0:
+            size = 14
+            opt = QStyleOptionButton()
+            opt.rect = QRect(
+                rect.x() + (rect.width() - size) // 2,
+                rect.y() + (rect.height() - size) // 2,
+                size,
+                size,
+            )
+            opt.state = QStyle.StateFlag.State_Enabled | (
+                QStyle.StateFlag.State_On if self._checked else QStyle.StateFlag.State_Off
+            )
+            self.style().drawPrimitive(
+                QStyle.PrimitiveElement.PE_IndicatorCheckBox, opt, painter
+            )
+
+
 # 主窗口
 class MusicDownloader(QMainWindow):
     def __init__(self):
@@ -476,7 +523,6 @@ class MusicDownloader(QMainWindow):
         }
         self.source_map_en_to_cn = {v: k for k, v in self.source_map_cn_to_en.items()}
 
-        self.music_records = {}
         self.music_client = None
         self.current_right_click_row = -1
 
@@ -537,6 +583,9 @@ class MusicDownloader(QMainWindow):
         QScrollBar::handle:vertical { background: #d1d5db; min-height: 20px; border-radius: 4px; }
         QScrollBar::handle:vertical:hover { background: #9ca3af; }
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+        QPushButton#SourceBtn { background-color: #f3f4f6; color: #374151; font-weight: normal; font-size: 9pt; padding: 2px 8px; }
+        QPushButton#SourceBtn:hover { background-color: #e5e7eb; }
+        QPushButton#SourceBtn:pressed { background-color: #d1d5db; }
         """
 
     def setup_top(self, parent_layout):
@@ -544,7 +593,25 @@ class MusicDownloader(QMainWindow):
         layout.setSpacing(10)
 
         group = QGroupBox("选择音乐源")
-        flow = FlowLayout()
+        group_vbox = QVBoxLayout(group)
+        group_vbox.setSpacing(4)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_all = QPushButton("全选")
+        btn_all.setObjectName("SourceBtn")
+        btn_all.setFixedWidth(52)
+        btn_all.clicked.connect(self.select_all_sources)
+        btn_none = QPushButton("清空")
+        btn_none.setObjectName("SourceBtn")
+        btn_none.setFixedWidth(52)
+        btn_none.clicked.connect(self.clear_all_sources)
+        btn_row.addWidget(btn_all)
+        btn_row.addWidget(btn_none)
+        group_vbox.addLayout(btn_row)
+
+        flow_container = QWidget()
+        flow = FlowLayout(flow_container, margin=0)
         self.source_checkboxes = []
         default_checked = ["酷我音乐", "酷狗音乐"]
         for cn_name in self.source_map_cn_to_en.keys():
@@ -553,7 +620,7 @@ class MusicDownloader(QMainWindow):
                 cb.setChecked(True)
             self.source_checkboxes.append(cb)
             flow.addWidget(cb)
-        group.setLayout(flow)
+        group_vbox.addWidget(flow_container)
         layout.addWidget(group)
 
         h1 = QHBoxLayout()
@@ -616,17 +683,25 @@ class MusicDownloader(QMainWindow):
         self.combo_download_scope.addItems(["勾选", "全选", "未勾选"])
         self.combo_download_scope.setFixedWidth(110)
 
+        self.label_result_count = QLabel("")
+        self.label_result_count.setStyleSheet("color: #6b7280; font-size: 9pt;")
+
         self.btn_download = QPushButton("⬇️ 下载选中内容")
         self.btn_download.clicked.connect(self.on_download)
         self.btn_download.setEnabled(False)
 
         batch.addWidget(scope_label)
         batch.addWidget(self.combo_download_scope)
+        batch.addSpacing(12)
+        batch.addWidget(self.label_result_count)
         batch.addStretch()
         batch.addWidget(self.btn_download)
         layout.addLayout(batch)
 
         self.results_table = QTableWidget()
+        self.table_header = CheckableHeader(Qt.Orientation.Horizontal)
+        self.table_header.check_state_changed.connect(self.on_header_check_changed)
+        self.results_table.setHorizontalHeader(self.table_header)
         self.results_table.setColumnCount(9)
         self.results_table.setHorizontalHeaderLabels(
             [
@@ -654,6 +729,7 @@ class MusicDownloader(QMainWindow):
         self.results_table.customContextMenuRequested.connect(
             self.show_table_context_menu
         )
+        self.results_table.cellDoubleClicked.connect(self.on_row_double_clicked)
 
         self.results_table.setColumnWidth(0, 40)
         self.results_table.setColumnWidth(1, 65)
@@ -664,6 +740,7 @@ class MusicDownloader(QMainWindow):
         self.results_table.setColumnWidth(6, 80)
         self.results_table.setColumnWidth(7, 70)
         self.results_table.verticalHeader().setDefaultSectionSize(54)
+        self.results_table.setSortingEnabled(True)
 
         layout.addWidget(self.results_table)
         parent_layout.addLayout(layout)
@@ -709,9 +786,12 @@ class MusicDownloader(QMainWindow):
     def download_current_row(self):
         if self.current_right_click_row < 0 or not self.music_client:
             return
-        if str(self.current_right_click_row) not in self.music_records:
+        item = self.results_table.item(self.current_right_click_row, 2)
+        if not item:
             return
-        song_info = self.music_records[str(self.current_right_click_row)]
+        song_info = item.data(Qt.ItemDataRole.UserRole)
+        if not song_info:
+            return
         song_name = song_info.get("song_name", "未知歌曲")
         singers = song_info.get("singers", "")
         singers_str = "&".join([str(s) for s in singers]) if isinstance(singers, list) else str(singers)
@@ -742,6 +822,24 @@ class MusicDownloader(QMainWindow):
                 checkbox = cell_widget.findChild(QCheckBox)
                 if checkbox:
                     checkbox.setChecked(False)
+
+    def select_all_sources(self):
+        for cb in self.source_checkboxes:
+            cb.setChecked(True)
+
+    def clear_all_sources(self):
+        for cb in self.source_checkboxes:
+            cb.setChecked(False)
+
+    def on_header_check_changed(self, checked):
+        if checked:
+            self.select_all_songs()
+        else:
+            self.deselect_all_songs()
+
+    def on_row_double_clicked(self, row, column):
+        self.current_right_click_row = row
+        self.download_current_row()
 
     def on_browse_save_dir(self):
         dir_path = QFileDialog.getExistingDirectory(
@@ -817,8 +915,11 @@ class MusicDownloader(QMainWindow):
         return ""
 
     def load_table_with_results(self, search_results):
+        self.results_table.setSortingEnabled(False)
         self.results_table.setRowCount(0)
-        self.music_records = {}
+        self.label_result_count.setText("")
+        self.table_header._checked = False
+        self.table_header.viewport().update()
 
         self.thread_pool.clear()  # drop pending image tasks from the previous search
         self._search_gen += 1
@@ -869,9 +970,9 @@ class MusicDownloader(QMainWindow):
                         else Qt.AlignmentFlag.AlignHCenter
                     )
                     table_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | align)
+                    if column == 2:
+                        table_item.setData(Qt.ItemDataRole.UserRole, per_source_search_result)
                     self.results_table.setItem(row, column, table_item)
-
-                self.music_records[str(row)] = per_source_search_result
 
                 album_image_url = self.get_album_image_url(per_source_search_result)
                 if album_image_url:
@@ -884,16 +985,11 @@ class MusicDownloader(QMainWindow):
 
                 row += 1
 
+        self.results_table.setSortingEnabled(True)
         self.btn_download.setEnabled(row > 0)
-
+        self.label_result_count.setText(f"共 {row} 首")
         if self.auto_download_after_search and all_songs:
             self._start_download_task(all_songs, f"正在处理 {len(all_songs)} 首歌曲")
-        else:
-            QMessageBox.information(
-                self,
-                "搜索完毕",
-                f"🎉 搜索完成！共找到 {row} 首歌曲。\n(专辑封面正在后台加载...)",
-            )
 
     def _start_download_task(self, songs_list, msg):
         if hasattr(self, 'download_thread') and self.download_thread.isRunning():
@@ -985,8 +1081,11 @@ class MusicDownloader(QMainWindow):
                 or (scope == "勾选" and is_checked)
                 or (scope == "未勾选" and not is_checked)
             ):
-                if str(row) in self.music_records:
-                    songs.append(self.music_records[str(row)])
+                item = self.results_table.item(row, 2)
+                if item:
+                    song_info = item.data(Qt.ItemDataRole.UserRole)
+                    if song_info:
+                        songs.append(song_info)
         return songs
 
     def on_search(self):
