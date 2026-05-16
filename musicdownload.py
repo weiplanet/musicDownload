@@ -117,23 +117,24 @@ class ModernSpinBox(QSpinBox):
 class ImageWorkerSignals(QObject):
     """QRunnable 不能直接发信号，需要借助 QObject"""
 
-    finished = Signal(int, QPixmap)
-    error = Signal(int)
+    finished = Signal(int, int, QPixmap)  # gen, row, pixmap
+    error = Signal(int, int)  # gen, row
 
 
 class ImageDownloadTask(QRunnable):
     """使用 QRunnable 放入线程池，避免瞬间开启几十个 QThread 导致程序崩溃/内存泄漏"""
 
-    def __init__(self, row, image_url):
+    def __init__(self, row, image_url, gen):
         super().__init__()
         self.row = row
         self.image_url = image_url
+        self.gen = gen
         self.signals = ImageWorkerSignals()
 
     def run(self):
         try:
             if not self.image_url:
-                self.signals.error.emit(self.row)
+                self.signals.error.emit(self.gen, self.row)
                 return
             response = requests.get(
                 self.image_url, timeout=5
@@ -147,11 +148,11 @@ class ImageDownloadTask(QRunnable):
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation,
                 )
-                self.signals.finished.emit(self.row, scaled_pixmap)
+                self.signals.finished.emit(self.gen, self.row, scaled_pixmap)
             else:
-                self.signals.error.emit(self.row)
+                self.signals.error.emit(self.gen, self.row)
         except Exception:
-            self.signals.error.emit(self.row)
+            self.signals.error.emit(self.gen, self.row)
 
 
 # ================= 后台搜索与下载线程 =================
@@ -442,6 +443,7 @@ class MusicDownloader(QMainWindow):
         # [优化 1] 初始化全局线程池，控制最大并发数防止卡死
         self.thread_pool = QThreadPool.globalInstance()
         self.thread_pool.setMaxThreadCount(10)
+        self._search_gen = 0  # incremented each search; stale image callbacks check this
 
         self.current_dir = os.getcwd()
         self.save_dir = os.path.join(self.current_dir, "已下载音乐")
@@ -629,7 +631,7 @@ class MusicDownloader(QMainWindow):
         parent_layout.addLayout(layout)
 
     def on_auto_download_toggle(self, state):
-        self.auto_download_after_search = state == Qt.CheckState.Checked
+        self.auto_download_after_search = self.check_auto_download.isChecked()
 
     # 右键菜单等保持原样...
     def show_table_context_menu(self, pos):
@@ -785,6 +787,8 @@ class MusicDownloader(QMainWindow):
 
         # [优化 2] 清理线程池排队任务（如果有旧的未完成的搜索任务图）
         self.thread_pool.clear()
+        self._search_gen += 1
+        current_gen = self._search_gen
 
         all_songs = []
         for per_source in search_results.values():
@@ -838,12 +842,12 @@ class MusicDownloader(QMainWindow):
                 # [优化 1] 将图片下载投递到线程池，而不是直接 new QThread
                 album_image_url = self.get_album_image_url(per_source_search_result)
                 if album_image_url:
-                    task = ImageDownloadTask(row, album_image_url)
+                    task = ImageDownloadTask(row, album_image_url, current_gen)
                     task.signals.finished.connect(self.on_image_downloaded)
                     task.signals.error.connect(self.on_image_error)
                     self.thread_pool.start(task)
                 else:
-                    self.on_image_error(row)
+                    self.on_image_error(current_gen, row)
 
                 row += 1
 
@@ -860,6 +864,10 @@ class MusicDownloader(QMainWindow):
 
     def _start_download_task(self, songs_list, msg):
         """[优化] 提取出公共的下载弹窗逻辑"""
+        if hasattr(self, 'download_thread') and self.download_thread.isRunning():
+            return
+
+        self.btn_download.setEnabled(False)
         dlg = SimpleProgressDialog("下载提取中", msg, self.save_dir, self)
         dlg.show()
 
@@ -869,6 +877,7 @@ class MusicDownloader(QMainWindow):
 
         def on_finished(success_count):
             dlg.accept()
+            self.btn_download.setEnabled(True)
             QMessageBox.information(
                 self,
                 "下载完成",
@@ -877,13 +886,16 @@ class MusicDownloader(QMainWindow):
 
         def on_error(error_msg):
             dlg.accept()
+            self.btn_download.setEnabled(True)
             QMessageBox.critical(self, "错误", f"❌ 下载失败：{error_msg}")
 
         self.download_thread.finished.connect(on_finished)
         self.download_thread.error.connect(on_error)
         self.download_thread.start()
 
-    def on_image_downloaded(self, row, pixmap):
+    def on_image_downloaded(self, gen, row, pixmap):
+        if gen != self._search_gen:
+            return
         try:
             label = QLabel()
             label.setPixmap(pixmap)
@@ -893,7 +905,9 @@ class MusicDownloader(QMainWindow):
         except Exception as e:
             print(f"设置专辑封面失败: {e}")
 
-    def on_image_error(self, row):
+    def on_image_error(self, gen, row):
+        if gen != self._search_gen:
+            return
         try:
             label = QLabel("🎵")
             label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -921,6 +935,9 @@ class MusicDownloader(QMainWindow):
         return songs
 
     def on_search(self):
+        if hasattr(self, 'search_thread') and self.search_thread.isRunning():
+            return
+
         keyword = self.search_edit.text().strip()
         if not keyword:
             QMessageBox.warning(self, "提示", "请输入你要搜索的关键词！")
