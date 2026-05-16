@@ -1,4 +1,4 @@
-"""Terminal UI for 音乐下载器, powered by Textual."""
+"""Music Downloader TUI — powered by Textual."""
 
 import os
 import re
@@ -34,7 +34,7 @@ from textual.widgets import (
 
 # ── Source maps ───────────────────────────────────────────────────────────────
 
-SOURCE_MAP_CN_TO_EN: dict[str, str] = {
+_CN_TO_CLIENT: dict[str, str] = {
     "苹果音乐": "AppleMusicClient",
     "Deezer": "DeezerMusicClient",
     "5sing": "FiveSingMusicClient",
@@ -53,8 +53,34 @@ SOURCE_MAP_CN_TO_EN: dict[str, str] = {
     "Spotify": "SpotifyMusicClient",
     "TIDAL": "TIDALMusicClient",
 }
-SOURCE_MAP_EN_TO_CN: dict[str, str] = {v: k for k, v in SOURCE_MAP_CN_TO_EN.items()}
-DEFAULT_SOURCES: frozenset[str] = frozenset({"酷我音乐", "酷狗音乐"})
+
+SOURCE_DISPLAY: dict[str, str] = {
+    "苹果音乐": "Apple Music",
+    "Deezer": "Deezer",
+    "5sing": "5sing",
+    "Jamendo": "Jamendo",
+    "Joox": "Joox",
+    "酷我音乐": "Kuwo",
+    "酷狗音乐": "Kugou",
+    "咪咕音乐": "Migu",
+    "网易云音乐": "NetEase",
+    "QQ音乐": "QQ Music",
+    "千千音乐": "Qianqian",
+    "Qobuz": "Qobuz",
+    "SoundCloud": "SoundCloud",
+    "StreetVoice": "StreetVoice",
+    "汽水音乐": "Soda",
+    "Spotify": "Spotify",
+    "TIDAL": "TIDAL",
+}
+
+DISPLAY_TO_CLIENT: dict[str, str] = {
+    disp: _CN_TO_CLIENT[cn] for cn, disp in SOURCE_DISPLAY.items()
+}
+CLIENT_TO_DISPLAY: dict[str, str] = {
+    _CN_TO_CLIENT[cn]: disp for cn, disp in SOURCE_DISPLAY.items()
+}
+DEFAULT_DISPLAY: frozenset[str] = frozenset({SOURCE_DISPLAY["酷我音乐"], SOURCE_DISPLAY["酷狗音乐"]})
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -87,50 +113,55 @@ Screen {
     background: $surface;
 }
 
-/* Top panel: sources + config + search */
+/* ── Top panel ── */
 #top-panel {
     height: auto;
     padding: 1 2;
     background: $panel;
-    border-bottom: solid $primary-darken-3;
+    border-bottom: thick $primary-darken-2;
 }
 
-#sources-row {
-    height: auto;
-    margin-bottom: 1;
+#sources-ctrl {
+    height: 1;
+    align: left middle;
+    margin-bottom: 0;
+}
+
+#sources-ctrl Label {
+    width: auto;
+    padding: 0 2 0 0;
+    color: $text-muted;
+    text-style: bold;
+}
+
+#sources-ctrl Button {
+    width: 8;
+    height: 1;
+    border: none;
+    padding: 0 2;
+    margin-right: 1;
+    min-width: 0;
 }
 
 #sources-grid {
     layout: grid;
-    grid-size: 4;
+    grid-size: 5;
     grid-gutter: 0 1;
-    width: 1fr;
     height: auto;
+    margin-bottom: 0;
 }
 
 #sources-grid Checkbox {
     height: 1;
-    padding: 0 0;
+    padding: 0;
     background: transparent;
     border: none;
 }
 
-#source-btns {
-    width: 10;
-    height: auto;
-    align: left top;
-    padding-top: 0;
-}
-
-#source-btns Button {
-    width: 8;
-    margin-bottom: 1;
-}
-
 #config-row {
-    height: 5;
+    height: 1;
     align: left middle;
-    margin-bottom: 1;
+    margin-bottom: 0;
 }
 
 #config-row Label {
@@ -141,44 +172,64 @@ Screen {
 
 #limit-input {
     width: 8;
-    height: 3;
+    height: 1;
     padding: 0 1;
+    border: none;
 }
 
 #save-dir-input {
     width: 1fr;
-    height: 3;
+    height: 1;
+    border: none;
+    padding: 0 1;
     margin-right: 1;
 }
 
+#btn-browse {
+    width: 10;
+    height: 1;
+    border: none;
+    padding: 0 2;
+    margin-right: 1;
+    min-width: 0;
+}
+
 #search-row {
-    height: 3;
+    height: 1;
     align: left middle;
 }
 
 #search-mode {
     width: 18;
-    height: 3;
+    height: 1;
+    border: none;
+    padding: 0 1;
     margin-right: 1;
 }
 
 #search-input {
     width: 1fr;
-    height: 3;
+    height: 1;
+    border: none;
+    padding: 0 1;
     margin-right: 1;
 }
 
 #btn-search {
-    width: 14;
+    width: 12;
+    height: 1;
+    border: none;
     background: $primary;
+    min-width: 0;
 }
 
-/* Results area */
+/* ── Results header ── */
 #results-header {
-    height: 3;
+    height: 1;
     align: left middle;
     padding: 0 2;
     background: $panel;
+    border-bottom: solid $primary-darken-3;
 }
 
 #count-label {
@@ -188,23 +239,28 @@ Screen {
 }
 
 #download-scope {
-    width: 18;
-    height: 3;
+    width: 16;
+    height: 1;
+    border: none;
+    padding: 0 1;
     margin-right: 1;
 }
 
 #btn-download {
     width: 12;
+    height: 1;
+    border: none;
     background: $success;
+    min-width: 0;
 }
 
 DataTable {
     height: 1fr;
 }
 
-/* Progress bar row — hidden by default */
+/* ── Progress bar ── */
 #progress-row {
-    height: 3;
+    height: 1;
     align: left middle;
     padding: 0 2;
     background: $panel;
@@ -224,9 +280,13 @@ DataTable {
 
 #btn-cancel {
     width: 8;
+    height: 1;
+    border: none;
+    padding: 0 1;
+    min-width: 0;
 }
 
-/* Browse modal */
+/* ── Browse modal ── */
 BrowseScreen {
     align: center middle;
 }
@@ -234,7 +294,7 @@ BrowseScreen {
 #browse-dialog {
     width: 60;
     height: 30;
-    border: solid $primary;
+    border: round $primary;
     background: $surface;
     padding: 1 2;
 }
@@ -248,15 +308,15 @@ BrowseScreen {
     height: 1fr;
 }
 
-/* Confirm modal */
+/* ── Confirm modal ── */
 ConfirmScreen {
     align: center middle;
 }
 
 #confirm-dialog {
-    width: 60;
+    width: 50;
     height: auto;
-    border: solid $primary;
+    border: round $primary;
     background: $surface;
     padding: 2 4;
 }
@@ -273,7 +333,7 @@ ConfirmScreen {
 
 #confirm-btns Button {
     margin: 0 2;
-    width: 12;
+    width: 10;
 }
 """
 
@@ -281,7 +341,7 @@ ConfirmScreen {
 
 
 class BrowseScreen(ModalScreen[str]):
-    BINDINGS = [("escape", "app.pop_screen", "取消")]
+    BINDINGS = [("escape", "app.pop_screen", "Cancel")]
 
     def __init__(self, start_path: str) -> None:
         super().__init__()
@@ -289,7 +349,7 @@ class BrowseScreen(ModalScreen[str]):
 
     def compose(self) -> ComposeResult:
         with Container(id="browse-dialog"):
-            yield Label("选择保存目录 (Enter 确认, Escape 取消)")
+            yield Label("Select save directory  (Enter to confirm, Escape to cancel)")
             yield DirectoryTree(self._start_path, id="dir-tree")
 
     def on_directory_tree_directory_selected(
@@ -299,7 +359,7 @@ class BrowseScreen(ModalScreen[str]):
 
 
 class ConfirmScreen(ModalScreen[bool]):
-    BINDINGS = [("escape", "dismiss_false", "取消")]
+    BINDINGS = [("escape", "dismiss_false", "Cancel")]
 
     def __init__(self, message: str) -> None:
         super().__init__()
@@ -309,8 +369,8 @@ class ConfirmScreen(ModalScreen[bool]):
         with Container(id="confirm-dialog"):
             yield Label(self._message, id="confirm-msg")
             with Horizontal(id="confirm-btns"):
-                yield Button("确认", id="btn-yes", variant="success")
-                yield Button("取消", id="btn-no")
+                yield Button("Confirm", id="btn-yes", variant="success")
+                yield Button("Cancel", id="btn-no")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id == "btn-yes")
@@ -323,14 +383,14 @@ class ConfirmScreen(ModalScreen[bool]):
 
 
 class MusicDownloaderApp(App[None]):
-    TITLE = "🎵 音乐下载器"
+    TITLE = "Music Downloader"
     CSS = APP_CSS
     BINDINGS = [
-        Binding("ctrl+q", "quit", "退出"),
-        Binding("ctrl+f", "focus_search", "搜索框"),
-        Binding("ctrl+d", "start_download", "下载"),
-        Binding("ctrl+a", "select_all_rows", "全选"),
-        Binding("ctrl+u", "deselect_all_rows", "取消全选"),
+        Binding("ctrl+q", "quit", "Quit"),
+        Binding("ctrl+f", "focus_search", "Search"),
+        Binding("ctrl+d", "start_download", "Download"),
+        Binding("ctrl+a", "select_all_rows", "Select All"),
+        Binding("ctrl+u", "deselect_all_rows", "Deselect"),
     ]
 
     def __init__(self) -> None:
@@ -351,62 +411,67 @@ class MusicDownloaderApp(App[None]):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
         with Vertical(id="top-panel"):
-            # Source checkboxes
-            with Horizontal(id="sources-row"):
-                with Container(id="sources-grid"):
-                    for cn_name in SOURCE_MAP_CN_TO_EN:
-                        yield Checkbox(cn_name, value=(cn_name in DEFAULT_SOURCES), compact=True)
-                with Vertical(id="source-btns"):
-                    yield Button("全选", id="btn-src-all")
-                    yield Button("清除", id="btn-src-none")
+            # Sources: label + All/None buttons on same row as grid header
+            with Horizontal(id="sources-ctrl"):
+                yield Label("Sources")
+                yield Button("All", id="btn-src-all")
+                yield Button("None", id="btn-src-none")
+            # Source checkboxes grid
+            with Container(id="sources-grid"):
+                for disp_name in SOURCE_DISPLAY.values():
+                    yield Checkbox(disp_name, value=(disp_name in DEFAULT_DISPLAY), compact=True)
             # Config row
             with Horizontal(id="config-row"):
-                yield Label("每源限制：")
+                yield Label("Limit")
                 yield Input("10", id="limit-input")
-                yield Label("  保存目录：")
+                yield Label("Save")
                 yield Input(self._save_dir, id="save-dir-input")
-                yield Button("浏览", id="btn-browse")
-                yield Label("  自动下载：")
+                yield Button("Browse", id="btn-browse")
+                yield Label("Auto DL")
                 yield Switch(False, id="auto-download")
             # Search row
             with Horizontal(id="search-row"):
                 yield Select(
-                    [("搜索歌曲", "search"), ("解析歌单", "playlist")],
+                    [("Search Song", "search"), ("Parse Playlist", "playlist")],
                     value="search",
                     id="search-mode",
                 )
-                yield Input(placeholder="输入关键词或歌单链接...", id="search-input")
-                yield Button("🔍 搜索", id="btn-search")
+                yield Input(placeholder="Enter keyword or playlist URL...", id="search-input")
+                yield Button("Search", id="btn-search")
         # Results header
         with Horizontal(id="results-header"):
-            yield Label("", id="count-label")
+            yield Label("No results", id="count-label")
             yield Select(
-                [("勾选歌曲", "checked"), ("全部", "all"), ("未勾选", "unchecked")],
+                [("Checked", "checked"), ("All", "all"), ("Unchecked", "unchecked")],
                 value="checked",
                 id="download-scope",
             )
-            yield Button("⬇ 下载", id="btn-download", disabled=True)
+            yield Button("Download", id="btn-download", disabled=True)
         # Results table
         yield DataTable(id="results-table", cursor_type="row")
-        # Progress row (hidden until a download starts)
+        # Progress row (hidden until download starts)
         with Horizontal(id="progress-row"):
             yield ProgressBar(total=100, id="progress-bar")
             yield Label("", id="progress-label")
-            yield Button("取消", id="btn-cancel")
+            yield Button("Cancel", id="btn-cancel")
         yield Footer()
 
     def on_mount(self) -> None:
         table = self.query_one("#results-table", DataTable)
         table.add_column("✓", key="check", width=3)
-        table.add_column("歌曲名", key="song", width=30)
-        table.add_column("歌手", key="singer", width=18)
-        table.add_column("专辑", key="album", width=20)
-        table.add_column("格式", key="fmt", width=6)
-        table.add_column("大小", key="size", width=8)
-        table.add_column("时长", key="dur", width=8)
-        table.add_column("来源", key="src", width=12)
+        table.add_column("Title", key="song", width=30)
+        table.add_column("Artist", key="singer", width=18)
+        table.add_column("Album", key="album", width=20)
+        table.add_column("Format", key="fmt", width=6)
+        table.add_column("Size", key="size", width=8)
+        table.add_column("Duration", key="dur", width=8)
+        table.add_column("Source", key="src", width=12)
         if not MUSICDL_AVAILABLE:
-            self.notify("musicdl 库未安装！请运行: pip install musicdl", severity="error", timeout=10)
+            self.notify(
+                "musicdl not installed — run: pip install musicdl",
+                severity="error",
+                timeout=10,
+            )
 
     # ── Source helpers ──────────────────────────────────────────────────────
 
@@ -418,9 +483,9 @@ class MusicDownloaderApp(App[None]):
         result = []
         for cb in self.query_one("#sources-grid").query(Checkbox):
             if cb.value:
-                cn = cb.label.plain
-                if cn in SOURCE_MAP_CN_TO_EN:
-                    result.append(SOURCE_MAP_CN_TO_EN[cn])
+                disp = cb.label.plain
+                if disp in DISPLAY_TO_CLIENT:
+                    result.append(DISPLAY_TO_CLIENT[disp])
         return result
 
     # ── Row check helpers ───────────────────────────────────────────────────
@@ -454,7 +519,7 @@ class MusicDownloaderApp(App[None]):
             self._do_download()
         elif btn_id == "btn-cancel":
             self._cancel_event.set()
-            self.notify("正在取消...", timeout=2)
+            self.notify("Cancelling...", timeout=2)
         elif btn_id == "btn-browse":
             self.push_screen(BrowseScreen(self._save_dir), self._on_browse_done)
         elif btn_id == "btn-src-all":
@@ -508,11 +573,11 @@ class MusicDownloaderApp(App[None]):
             return
         keyword = self.query_one("#search-input", Input).value.strip()
         if not keyword:
-            self.notify("请输入关键词", severity="warning")
+            self.notify("Please enter a keyword", severity="warning")
             return
         src_names = self._get_selected_sources()
         if not src_names:
-            self.notify("请至少选择一个音乐来源", severity="warning")
+            self.notify("Select at least one source", severity="warning")
             return
 
         limit_str = self.query_one("#limit-input", Input).value.strip()
@@ -533,13 +598,13 @@ class MusicDownloaderApp(App[None]):
                 music_sources=src_names, init_music_clients_cfg=cfg
             )
         except Exception as e:
-            self.notify(f"初始化客户端失败：{e}", severity="error")
+            self.notify(f"Failed to init client: {e}", severity="error")
             return
 
         self._is_searching = True
         btn = self.query_one("#btn-search", Button)
         btn.disabled = True
-        btn.label = "搜索中..."
+        btn.label = "Searching…"
         self._run_search(keyword, search_mode)
 
     @work(thread=True)
@@ -550,7 +615,7 @@ class MusicDownloaderApp(App[None]):
             else:
                 results = self._music_client.parseplaylist(keyword)
                 if not isinstance(results, dict):
-                    results = {"歌单": results}
+                    results = {"playlist": results}
             self.call_from_thread(self._on_search_done, results)
         except Exception as e:
             self.call_from_thread(self._on_search_error, str(e))
@@ -559,7 +624,7 @@ class MusicDownloaderApp(App[None]):
         self._is_searching = False
         btn = self.query_one("#btn-search", Button)
         btn.disabled = False
-        btn.label = "🔍 搜索"
+        btn.label = "Search"
         self._load_table(results)
         if self.query_one("#auto-download", Switch).value and self._songs:
             self._start_download_for(self._songs)
@@ -568,8 +633,8 @@ class MusicDownloaderApp(App[None]):
         self._is_searching = False
         btn = self.query_one("#btn-search", Button)
         btn.disabled = False
-        btn.label = "🔍 搜索"
-        self.notify(f"搜索失败：{msg}", severity="error")
+        btn.label = "Search"
+        self.notify(f"Search failed: {msg}", severity="error")
 
     def _load_table(self, search_results: dict) -> None:
         table = self.query_one("#results-table", DataTable)
@@ -589,17 +654,19 @@ class MusicDownloaderApp(App[None]):
                 get_file_format(song),
                 str(song.get("file_size", "")),
                 str(song.get("duration", "")),
-                SOURCE_MAP_EN_TO_CN.get(song.get("source", ""), ""),
+                CLIENT_TO_DISPLAY.get(song.get("source", ""), ""),
                 key=rk,
             )
             self._songs.append(song)
             self._row_keys.append(rk)
 
         count = len(all_songs)
-        self.query_one("#count-label", Label).update(f"共 {count} 首")
+        self.query_one("#count-label", Label).update(
+            f"{count} result{'s' if count != 1 else ''} found" if count else "No results"
+        )
         self.query_one("#btn-download", Button).disabled = count == 0
         if count:
-            self.notify(f"找到 {count} 首歌曲", timeout=3)
+            self.notify(f"Found {count} tracks", timeout=3)
 
     # ── Download ──────────────────────────────────────────────────────────────
 
@@ -617,9 +684,10 @@ class MusicDownloaderApp(App[None]):
             return
         songs = self._get_songs_by_scope()
         if not songs:
-            self.notify("没有符合条件的歌曲", severity="warning")
+            self.notify("No tracks match the current scope", severity="warning")
             return
-        msg = f"确定要下载 {len(songs)} 首歌曲？\n保存到：{self._save_dir}"
+        n = len(songs)
+        msg = f"Download {n} track{'s' if n != 1 else ''}?\nSave to: {self._save_dir}"
         self.push_screen(
             ConfirmScreen(msg),
             lambda ok: ok and self._start_download_for(songs),
@@ -656,7 +724,7 @@ class MusicDownloaderApp(App[None]):
                 results = self._music_client.download(song_infos=[song_info])
                 success += self._move_downloaded(results, save_dir)
             except Exception as e:
-                print(f"下载失败: {e}")
+                print(f"Download error: {e}")
             self.call_from_thread(self._on_progress, i + 1, total)
 
         if os.path.isdir(temp_dir):
@@ -669,8 +737,8 @@ class MusicDownloaderApp(App[None]):
             save_path = song.get("save_path", "")
             if not save_path or not os.path.exists(save_path):
                 continue
-            song_name = song.get("song_name", "未知歌曲")
-            singer = format_singers(song.get("singers", "未知歌手"))
+            song_name = song.get("song_name", "Unknown Song")
+            singer = format_singers(song.get("singers", "Unknown Artist"))
             album = song.get("album", "")
             identifier = song.get("identifier", "")
             ext = os.path.splitext(save_path)[1].lstrip(".") or song.get("ext", "mp3")
@@ -689,7 +757,7 @@ class MusicDownloaderApp(App[None]):
                 shutil.move(save_path, dest)
                 success += 1
             except Exception as e:
-                print(f"移动文件失败: {e}")
+                print(f"Move failed: {e}")
 
             old_lrc = os.path.splitext(save_path)[0] + ".lrc"
             if os.path.exists(old_lrc):
@@ -699,7 +767,7 @@ class MusicDownloaderApp(App[None]):
                         os.remove(new_lrc)
                     shutil.move(old_lrc, new_lrc)
                 except Exception as e:
-                    print(f"移动歌词失败: {e}")
+                    print(f"LRC move failed: {e}")
         return success
 
     def _on_progress(self, current: int, total: int) -> None:
@@ -711,15 +779,11 @@ class MusicDownloaderApp(App[None]):
         self.query_one("#progress-row").display = False
         self.query_one("#btn-download", Button).disabled = len(self._songs) == 0
         if cancelled and success:
-            self.notify(
-                f"已取消，成功下载了 {success} 首，保存在：{self._save_dir}", timeout=8
-            )
+            self.notify(f"Cancelled — {success} track(s) saved to {self._save_dir}", timeout=8)
         elif cancelled:
-            self.notify("下载已取消", timeout=4)
+            self.notify("Download cancelled", timeout=4)
         else:
-            self.notify(
-                f"✅ 成功下载 {success} 首！保存在：{self._save_dir}", timeout=8
-            )
+            self.notify(f"✓ {success} track(s) downloaded to {self._save_dir}", timeout=8)
 
 
 if __name__ == "__main__":
