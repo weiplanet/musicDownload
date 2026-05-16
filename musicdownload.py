@@ -855,6 +855,7 @@ class MusicDownloader(QMainWindow):
 
                 song_name = per_source_search_result.get("song_name", "")
                 singers = per_source_search_result.get("singers", "")
+                singers_str = "&".join([str(s) for s in singers]) if isinstance(singers, list) else str(singers)
                 album = per_source_search_result.get("album", "")
                 source_cn = self.source_map_en_to_cn.get(
                     per_source_search_result.get("source", ""), ""
@@ -864,7 +865,7 @@ class MusicDownloader(QMainWindow):
                     "",
                     "",
                     str(song_name),
-                    str(singers),
+                    singers_str,
                     str(album),
                     self.get_file_format(per_source_search_result),
                     str(per_source_search_result.get("file_size", "")),
